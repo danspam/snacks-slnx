@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Nested solution folders test fixture -->
+<Solution>
+  <Folder Name="/Infrastructure/">
+    <Folder Name="/Data/">
+      <Project Path="src/Infrastructure.Data/Infrastructure.Data.csproj" />
+    </Folder>
+    <Folder Name="/API/">
+      <Project Path="src/Infrastructure.API/Infrastructure.API.csproj" />
+      <File Path="api-notes.txt" />
+    </Folder>
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="tests/Unit/Unit.csproj" />
+    <Project Path="tests/Integration/Integration.csproj" />
+  </Folder>
+</Solution>

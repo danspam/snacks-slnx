@@ -1,0 +1,12 @@
+# Neovim swap, backup, and undo files
+*.swp
+*.swo
+*~
+*.un~
+
+# Luarocks / busted (if installed locally for testing)
+luarocks/
+.luarocks/
+
+# Test output
+*.log
