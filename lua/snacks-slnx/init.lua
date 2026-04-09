@@ -58,31 +58,48 @@ local function patch_snacks()
 
   sources.explorer = vim.tbl_extend("force", existing, {
     finder = finder.slnx_finder,
-    -- Keep the standard explorer config function so that confirm actions,
-    -- filter transforms and formatters are still configured correctly.
+    -- config() is called by snacks and its RETURN VALUE replaces opts.
+    -- We must: (1) call the standard explorer setup to get filter/formatters/confirm,
+    -- (2) wrap confirm so virtual folders toggle instead of erroring,
+    -- (3) return the fully merged opts table.
     config = function(opts)
-      local ok, explorer_mod = pcall(require, "snacks.picker.source.explorer")
-      if ok then
-        explorer_mod.setup(opts)
+      -- Run standard explorer setup. It returns a new merged table; capture it.
+      local ok_exp, explorer_mod = pcall(require, "snacks.picker.source.explorer")
+      local merged = opts
+      if ok_exp then
+        merged = explorer_mod.setup(opts) or opts
       end
-      -- Pass our show_solution_files option into opts so the finder can read it.
-      opts.show_solution_files = (M._config or defaults).show_solution_files
-    end,
-    -- Override confirm so pressing <CR> on a virtual solution folder is a no-op
-    -- rather than trying to call Tree:toggle() on a non-existent path.
-    actions = {
-      confirm = function(picker, item)
-        if item and item._slnx_virtual then
-          -- Virtual solution folder: nothing to open.
+
+      -- Wrap the confirm action that setup() installed.
+      merged.actions = merged.actions or {}
+      local base_confirm = merged.actions.confirm
+      merged.actions.confirm = function(picker, item)
+        -- Identify virtual solution folders by custom flag OR path sentinel.
+        local is_virtual = item
+          and (item._slnx_virtual
+            or (item.dir and item.file and item.file:find("/.slnx_virtual/", 1, true) ~= nil))
+
+        if is_virtual then
+          require("snacks-slnx.finder").toggle_virtual(item.file)
+          local ok_act, actions = pcall(require, "snacks.explorer.actions")
+          if ok_act and actions.update then
+            actions.update(picker)
+          else
+            picker:find()
+          end
           return
         end
-        -- Fall through to the standard explorer confirm action.
-        local ok, actions = pcall(require, "snacks.explorer.actions")
-        if ok then
-          actions.actions.confirm(picker, item)
+
+        if base_confirm then
+          base_confirm(picker, item)
         end
-      end,
-    },
+      end
+
+      -- Expose our option so the finder can read it from opts.
+      merged.show_solution_files = (M._config or defaults).show_solution_files
+
+      return merged
+    end,
   })
 
   return true

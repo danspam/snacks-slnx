@@ -40,6 +40,11 @@ end
 -- Install the stub into package.loaded so require() resolves it.
 package.loaded["snacks.explorer.tree"] = Tree
 
+-- Reset virtual_open state before every test so tests are independent.
+local function reset_virtual_open()
+  finder.virtual_open = {}
+end
+
 -- ── Helper ───────────────────────────────────────────────────────────────────
 
 --- Collect all items emitted by a finder callback into a list.
@@ -128,6 +133,7 @@ describe("finder.make", function()
 
   before_each(function()
     Tree:reset()
+    reset_virtual_open()
     -- By default, no nodes are open so project dirs won't expand.
   end)
 
@@ -492,5 +498,135 @@ describe("finder.make", function()
     -- root + Infrastructure + Data + Infra.Data + API + Infra.API + api-notes.txt + Tests + Unit + Integration
     local items = collect(finder.make(sol, cwd, opts))
     assert.equals(10, #items)
+  end)
+end)
+
+-- ── Virtual folder toggle (open/closed state) ─────────────────────────────────
+
+describe("finder.toggle_virtual", function()
+  local cwd = "/solution/root"
+  local opts = { show_solution_files = true }
+
+  before_each(function()
+    Tree:reset()
+    reset_virtual_open()
+  end)
+
+  local function one_folder_sol()
+    return {
+      folders = {
+        {
+          name = "src",
+          raw_name = "/src/",
+          folders = {},
+          projects = { { path = "src/App/App.csproj", dir = "src/App", name = "App", startup = false } },
+          files = {},
+        },
+      },
+      projects = {},
+      files = {},
+    }
+  end
+
+  it("virtual folders start open by default", function()
+    local items = collect(finder.make(one_folder_sol(), cwd, opts))
+    local folder = items[2]
+    assert.is_true(folder._slnx_virtual)
+    assert.is_true(folder.open)
+    -- Children are emitted (root + folder + project = 3)
+    assert.equals(3, #items)
+  end)
+
+  it("toggle_virtual closes an open virtual folder", function()
+    -- Collect once to learn the virtual path
+    local items = collect(finder.make(one_folder_sol(), cwd, opts))
+    local folder = items[2]
+    assert.is_true(folder.open)
+
+    -- Toggle closed
+    local new_state = finder.toggle_virtual(folder.file)
+    assert.is_false(new_state)
+
+    -- Re-collect: folder should now be closed and have no children
+    local items2 = collect(finder.make(one_folder_sol(), cwd, opts))
+    local folder2 = items2[2]
+    assert.is_false(folder2.open)
+    -- Only root + closed folder emitted (no project child)
+    assert.equals(2, #items2)
+  end)
+
+  it("toggle_virtual reopens a closed virtual folder", function()
+    local items = collect(finder.make(one_folder_sol(), cwd, opts))
+    local vpath = items[2].file
+
+    finder.toggle_virtual(vpath)  -- close
+    finder.toggle_virtual(vpath)  -- reopen
+
+    local items2 = collect(finder.make(one_folder_sol(), cwd, opts))
+    assert.is_true(items2[2].open)
+    assert.equals(3, #items2)  -- children visible again
+  end)
+
+  it("toggling one folder does not affect siblings", function()
+    local sol = {
+      folders = {
+        { name = "A", raw_name = "/A/", folders = {}, projects = { { path = "src/a/a.csproj", dir = "src/a", name = "A", startup = false } }, files = {} },
+        { name = "B", raw_name = "/B/", folders = {}, projects = { { path = "src/b/b.csproj", dir = "src/b", name = "B", startup = false } }, files = {} },
+      },
+      projects = {},
+      files = {},
+    }
+
+    -- Learn virtual paths: root, A(virtual), A-project, B(virtual), B-project = 5 items
+    local items = collect(finder.make(sol, cwd, opts))
+    assert.equals(5, #items)
+
+    -- Virtual folder items have _slnx_virtual set; find them by their path suffix.
+    local folder_a = find_item(items, ".slnx_virtual/A")
+    local folder_b = find_item(items, ".slnx_virtual/B")
+    assert.is_not_nil(folder_a)
+    assert.is_not_nil(folder_b)
+
+    -- Close A only
+    finder.toggle_virtual(folder_a.file)
+
+    local items2 = collect(finder.make(sol, cwd, opts))
+    -- A is closed (no child), B is still open (has child)
+    -- root + A(closed) + B(open) + B's project = 4
+    assert.equals(4, #items2)
+    local a2 = find_item(items2, ".slnx_virtual/A")
+    local b2 = find_item(items2, ".slnx_virtual/B")
+    assert.is_false(a2.open)
+    assert.is_true(b2.open)
+  end)
+
+  it("toggling a parent folder hides its nested children recursively", function()
+    local sol = {
+      folders = {
+        {
+          name = "src",
+          raw_name = "/src/",
+          folders = {
+            { name = "app", raw_name = "/src/app/", folders = {}, projects = { { path = "src/App.csproj", dir = "src", name = "App", startup = false } }, files = {} },
+          },
+          projects = {},
+          files = {},
+        },
+      },
+      projects = {},
+      files = {},
+    }
+
+    -- Open: root + src + app + project = 4
+    local items = collect(finder.make(sol, cwd, opts))
+    assert.equals(4, #items)
+    local src_item = items[2]
+
+    -- Close src
+    finder.toggle_virtual(src_item.file)
+    local items2 = collect(finder.make(sol, cwd, opts))
+    -- Closed src hides app and project: root + src = 2
+    assert.equals(2, #items2)
+    assert.is_false(items2[2].open)
   end)
 end)

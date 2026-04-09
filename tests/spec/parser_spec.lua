@@ -201,9 +201,9 @@ describe("parser.parse_string", function()
     assert.equals("B", sol.folders[2].name)
   end)
 
-  -- ── Nested folders ────────────────────────────────────────────────────────
+  -- ── Nested folders: XML nesting style (test fixtures) ────────────────────
 
-  it("parses nested Folders", function()
+  it("parses XML-nested Folders (nested inside parent Folder element)", function()
     local xml = [[
       <Solution>
         <Folder Name="/Infrastructure/">
@@ -225,6 +225,101 @@ describe("parser.parse_string", function()
     assert.equals("API", infra.folders[2].name)
     assert.equals(1, #infra.folders[1].projects)
     assert.equals("src/Infra.Data/Infra.Data.csproj", infra.folders[1].projects[1].path)
+  end)
+
+  -- ── Nested folders: flat-path sibling style (real .slnx files) ───────────
+
+  it("reconstructs hierarchy from flat-path sibling Folder names", function()
+    local xml = [[
+      <Solution>
+        <Folder Name="/src/" />
+        <Folder Name="/src/app/">
+          <Project Path="src/App/App.csproj" />
+        </Folder>
+        <Folder Name="/src/lib/">
+          <Project Path="src/Lib/Lib.csproj" />
+        </Folder>
+      </Solution>
+    ]]
+    local sol = parser.parse_string(xml)
+    -- /src/ is the only root-level folder; app and lib are its children
+    assert.equals(1, #sol.folders)
+    local src = sol.folders[1]
+    assert.equals("src", src.name)
+    assert.equals(2, #src.folders)
+    assert.equals("app", src.folders[1].name)
+    assert.equals("lib", src.folders[2].name)
+    assert.equals(1, #src.folders[1].projects)
+    assert.equals("src/App/App.csproj", src.folders[1].projects[1].path)
+  end)
+
+  it("handles flat-path folders with files at multiple nesting levels", function()
+    local xml = [[
+      <Solution>
+        <Folder Name="/solution files/">
+          <File Path=".editorconfig" />
+        </Folder>
+        <Folder Name="/solution files/.github/" />
+        <Folder Name="/solution files/.github/instructions/">
+          <File Path=".github/instructions/csharp.instructions.md" />
+        </Folder>
+      </Solution>
+    ]]
+    local sol = parser.parse_string(xml)
+    assert.equals(1, #sol.folders)
+    local sf = sol.folders[1]
+    assert.equals("solution files", sf.name)
+    assert.equals(1, #sf.files)
+    assert.equals(".editorconfig", sf.files[1].path)
+
+    assert.equals(1, #sf.folders)
+    local gh = sf.folders[1]
+    assert.equals(".github", gh.name)
+    assert.equals(0, #gh.files)  -- empty self-closing element
+
+    assert.equals(1, #gh.folders)
+    local instr = gh.folders[1]
+    assert.equals("instructions", instr.name)
+    assert.equals(1, #instr.files)
+    assert.equals(".github/instructions/csharp.instructions.md", instr.files[1].path)
+  end)
+
+  it("ignores unknown top-level elements (Configurations, Properties, etc.)", function()
+    local xml = [[
+      <Solution>
+        <Configurations>
+          <BuildType Name="Debug" />
+          <Platform Name="Any CPU" />
+        </Configurations>
+        <Folder Name="/src/">
+          <Project Path="src/App.csproj" />
+        </Folder>
+        <Properties Name="JSLint">
+          <Property Name="foo" Value="bar" />
+        </Properties>
+      </Solution>
+    ]]
+    local sol, err = parser.parse_string(xml)
+    assert.is_nil(err)
+    assert.equals(1, #sol.folders)
+    assert.equals("src", sol.folders[1].name)
+    assert.equals(0, #sol.projects)
+  end)
+
+  it("ignores BuildType children inside Project elements", function()
+    local xml = [[
+      <Solution>
+        <Folder Name="/src/">
+          <Project Path="src/App/App.csproj">
+            <BuildType Solution="Debug|*" Project="Debug" />
+            <BuildType Solution="Release|*" Project="Release" />
+          </Project>
+        </Folder>
+      </Solution>
+    ]]
+    local sol = parser.parse_string(xml)
+    assert.equals(1, #sol.folders[1].projects)
+    assert.equals("src/App/App.csproj", sol.folders[1].projects[1].path)
   end)
 
   it("preserves insertion order of folders, projects, and files", function()
@@ -311,6 +406,39 @@ describe("parser.parse_string", function()
     assert.same({}, sol.folders)
     assert.same({}, sol.projects)
     assert.same({}, sol.files)
+  end)
+
+  it("parses flat_path.slnx fixture (real-world flat-path encoding)", function()
+    local sol, err = parser.parse(fixtures_dir .. "/flat_path.slnx")
+    assert.is_nil(err)
+
+    -- Root folders: solution files, src, tests (3 roots; .github etc. are children)
+    assert.equals(3, #sol.folders)
+    local sf = sol.folders[1]
+    local src = sol.folders[2]
+    local tests = sol.folders[3]
+
+    assert.equals("solution files", sf.name)
+    assert.equals("src", src.name)
+    assert.equals("tests", tests.name)
+
+    -- solution files → .github → instructions
+    assert.equals(2, #sf.files)
+    assert.equals(1, #sf.folders)
+    local gh = sf.folders[1]
+    assert.equals(".github", gh.name)
+    assert.equals(1, #gh.folders)
+    assert.equals("instructions", gh.folders[1].name)
+    assert.equals(1, #gh.folders[1].files)
+
+    -- src → app, lib
+    assert.equals(2, #src.folders)
+    assert.equals("app", src.folders[1].name)
+    assert.equals("lib", src.folders[2].name)
+    assert.is_true(src.folders[1].projects[1].startup)
+
+    -- tests → 1 project
+    assert.equals(1, #tests.projects)
   end)
 
   -- ── File I/O error handling ───────────────────────────────────────────────

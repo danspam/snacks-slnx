@@ -3,6 +3,23 @@
 --- hierarchy defined in the nearest .slnx solution file.
 local M = {}
 
+--- Per-session open/closed state for virtual solution folders.
+--- Keys are virtual paths (see virtual_path()); values are booleans.
+--- Absent key = default open (true).  Persists across re-finds within a session.
+---@type table<string, boolean>
+M.virtual_open = {}
+
+--- Toggle the open/closed state of a virtual folder path and return the new state.
+---@param vpath string
+---@return boolean new_state
+function M.toggle_virtual(vpath)
+  -- Default is open, so a missing key means "was open, now close"
+  local was_open = M.virtual_open[vpath]
+  if was_open == nil then was_open = true end
+  M.virtual_open[vpath] = not was_open
+  return not was_open
+end
+
 --- Scan a directory for the first .slnx file (non-recursive).
 ---@param dir string Absolute directory path
 ---@return string|nil filepath
@@ -124,16 +141,15 @@ function M.make(solution, cwd, opts)
     ---@param parent table Parent item
     ---@param sort_key string
     ---@param is_virtual boolean True for solution folder nodes with no real path
-    ---@param force_open boolean|nil Override open state
     ---@return table item
-    local function emit_dir_item(dir_path, parent, sort_key, is_virtual, force_open)
+    local function emit_dir_item(dir_path, parent, sort_key, is_virtual)
       local basename = vim.fn.fnamemodify(dir_path, ":t")
       local node = ok_tree and not is_virtual and Tree:node(dir_path) or nil
       local open_state
-      if force_open ~= nil then
-        open_state = force_open
-      elseif is_virtual then
-        open_state = true -- solution folders are always expanded
+      if is_virtual then
+        -- Consult session state; default open when first seen.
+        local stored = M.virtual_open[dir_path]
+        open_state = (stored == nil) and true or stored
       else
         open_state = node and node.open or false
       end
@@ -210,6 +226,11 @@ function M.make(solution, cwd, opts)
       local vpath = virtual_path(cwd, folder.name, parent_vpath)
       local sk = next_sort(parent.sort, true)
       local folder_item = emit_dir_item(vpath, parent, sk, true)
+
+      -- Only emit children when the virtual folder is open.
+      if not folder_item.open then
+        return
+      end
 
       -- Subfolders first (directories sort before files)
       for _, sub in ipairs(folder.folders or {}) do

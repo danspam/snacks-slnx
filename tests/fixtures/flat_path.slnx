@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flat-path sibling encoding (real .slnx format).
+     Folder nesting is expressed by path-like Name values, NOT by XML nesting.
+     Compare with nested.slnx which uses XML nesting. -->
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+  </Configurations>
+  <Folder Name="/solution files/">
+    <File Path=".editorconfig" />
+    <File Path=".gitignore" />
+  </Folder>
+  <Folder Name="/solution files/.github/" />
+  <Folder Name="/solution files/.github/instructions/">
+    <File Path=".github/instructions/csharp.instructions.md" />
+  </Folder>
+  <Folder Name="/src/" />
+  <Folder Name="/src/app/">
+    <Project Path="src/App/App.csproj" DefaultStartup="true" />
+  </Folder>
+  <Folder Name="/src/lib/">
+    <Project Path="src/Lib/Lib.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/App.Tests/App.Tests.csproj" />
+  </Folder>
+</Solution>

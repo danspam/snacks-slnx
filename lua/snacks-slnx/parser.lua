@@ -131,14 +131,6 @@ local function find_and_parse_solution(tokens)
   return nil, "No <Solution> element found"
 end
 
---- Normalize a solution folder name by stripping surrounding slashes.
---- e.g. "/src/" -> "src", "/Tests/" -> "Tests"
----@param raw string
----@return string
-local function normalize_folder_name(raw)
-  return (raw:match("^/?(.-)/?$")) or raw
-end
-
 --- Derive the directory containing a project file path.
 --- e.g. "src/App/App.csproj" -> "src/App"
 ---     "App.csproj"           -> "."
@@ -159,41 +151,155 @@ local function project_name(project_path)
   return filename:match("^(.+)%.[^.]+$") or filename
 end
 
---- Recursively convert an XML element and its children into a solution node.
----@param elem table XML element
----@return table node  { folders, projects, files }
-local function elem_to_node(elem)
-  local node = { folders = {}, projects = {}, files = {} }
+--- Turn a raw folder Name attribute into a canonical path with leading and
+--- trailing slashes: "/src/app/" → "/src/app/"  "Tests" → "/Tests/"
+---@param raw string
+---@return string
+local function canonical_path(raw)
+  local p = raw
+  if p:sub(1, 1) ~= "/" then p = "/" .. p end
+  if p:sub(-1) ~= "/" then p = p .. "/" end
+  return p
+end
 
-  for _, child in ipairs(elem.children or {}) do
-    if child.name == "Folder" then
-      local raw_name = child.attrs.Name or ""
-      local name = normalize_folder_name(raw_name)
-      local sub = elem_to_node(child)
-      node.folders[#node.folders + 1] = {
-        name = name,
-        raw_name = raw_name,
-        folders = sub.folders,
-        projects = sub.projects,
-        files = sub.files,
-      }
-    elseif child.name == "Project" then
-      local path = child.attrs.Path or ""
-      node.projects[#node.projects + 1] = {
-        path = path,
-        dir = project_dir(path),
-        name = project_name(path),
-        startup = child.attrs.DefaultStartup == "true",
-      }
-    elseif child.name == "File" then
-      local path = child.attrs.Path or ""
-      node.files[#node.files + 1] = {
-        path = path,
-        name = path:match("([^/]+)$") or path,
-      }
+--- Return the last path segment of a canonical folder path (the display name).
+--- "/src/app/" → "app",  "/solution files/" → "solution files"
+---@param path string canonical path
+---@return string
+local function last_segment(path)
+  -- strip trailing slash, then take everything after the last remaining slash
+  local inner = path:sub(1, -2) -- drop trailing "/"
+  return inner:match("([^/]+)$") or inner
+end
+
+--- Return the parent canonical path, or nil if already at root depth.
+--- "/src/app/" → "/src/"
+--- "/src/"     → nil
+---@param path string canonical path
+---@return string|nil
+local function parent_path(path)
+  -- drop trailing slash, find the last slash
+  local inner = path:sub(1, -2)
+  local parent = inner:match("^(.*)/[^/]+$")
+  if not parent or parent == "" then
+    return nil
+  end
+  return parent .. "/"
+end
+
+--- Build a project entry from an XML element's attrs.
+---@param xml_elem table
+---@return table
+local function make_project(xml_elem)
+  local path = xml_elem.attrs.Path or ""
+  return {
+    path = path,
+    dir = project_dir(path),
+    name = project_name(path),
+    startup = xml_elem.attrs.DefaultStartup == "true",
+  }
+end
+
+--- Build a file entry from an XML element's attrs.
+---@param xml_elem table
+---@return table
+local function make_file(xml_elem)
+  local path = xml_elem.attrs.Path or ""
+  return { path = path, name = path:match("([^/]+)$") or path }
+end
+
+--- Build a tree of folder nodes from a flat list of <Folder> XML elements.
+---
+--- Real .slnx files use *flat-path siblings* to express nesting:
+---   <Folder Name="/src/" />
+---   <Folder Name="/src/app/">...</Folder>    ← sibling, not XML child
+--- The hierarchy is reconstructed here by treating folder Name values as paths.
+---
+--- Our test fixtures use *XML nesting*:
+---   <Folder Name="/Infrastructure/">
+---     <Folder Name="/Data/">...</Folder>     ← actual XML child
+---   </Folder>
+--- Those XML-child folders are detected in the third pass below and appended
+--- to their parent's .folders list, so both encodings work correctly.
+---
+---@param folder_elems table  list of XML Folder element nodes (siblings)
+---@return table root_folders
+local function build_folder_tree(folder_elems)
+  local ordered = {} ---@type table[]  preserves XML declaration order
+  local by_path = {} ---@type table<string, table>
+
+  -- ── Pass 1: create an entry for every folder element ─────────────────────
+  for _, xml in ipairs(folder_elems) do
+    local raw = xml.attrs.Name or ""
+    local cpath = canonical_path(raw)
+    local entry = {
+      name     = last_segment(cpath),
+      raw_name = raw,
+      _path    = cpath,
+      _xml     = xml,
+      folders  = {},
+      projects = {},
+      files    = {},
+    }
+    ordered[#ordered + 1] = entry
+    -- Later entries with the same path silently overwrite (shouldn't happen in
+    -- valid files, but avoids a crash if it does).
+    by_path[cpath] = entry
+  end
+
+  -- ── Pass 2: attach entries to their path-implied parent ───────────────────
+  local root_folders = {}
+  for _, entry in ipairs(ordered) do
+    local pp = parent_path(entry._path)
+    local parent = pp and by_path[pp]
+    if parent then
+      parent.folders[#parent.folders + 1] = entry
+    else
+      root_folders[#root_folders + 1] = entry
     end
   end
 
+  -- ── Pass 3: populate projects / files from each XML element's children ────
+  -- Also handle XML-nested <Folder> elements (the alternative encoding style).
+  for _, entry in ipairs(ordered) do
+    for _, child in ipairs(entry._xml.children or {}) do
+      if child.name == "Project" then
+        entry.projects[#entry.projects + 1] = make_project(child)
+      elseif child.name == "File" then
+        entry.files[#entry.files + 1] = make_file(child)
+      elseif child.name == "Folder" then
+        -- XML-nested folder (not seen in flat-path files, but supported).
+        -- Recursively build its subtree and attach it.
+        local sub = build_folder_tree({ child })
+        for _, s in ipairs(sub) do
+          entry.folders[#entry.folders + 1] = s
+        end
+      end
+    end
+  end
+
+  return root_folders
+end
+
+--- Convert the parsed <Solution> XML element into the solution table.
+---@param elem table XML element
+---@return table  { folders, projects, files }
+local function elem_to_node(elem)
+  local node = { folders = {}, projects = {}, files = {} }
+  local folder_elems = {}
+
+  for _, child in ipairs(elem.children or {}) do
+    if child.name == "Folder" then
+      folder_elems[#folder_elems + 1] = child
+    elseif child.name == "Project" then
+      node.projects[#node.projects + 1] = make_project(child)
+    elseif child.name == "File" then
+      node.files[#node.files + 1] = make_file(child)
+    end
+    -- Ignore <Configurations>, <Properties>, <BuildType>, and other elements.
+  end
+
+  node.folders = build_folder_tree(folder_elems)
   return node
 end
 
