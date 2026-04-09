@@ -501,6 +501,92 @@ describe("finder.make", function()
   end)
 end)
 
+-- ── Confirm action wrapper (init.lua contract) ────────────────────────────────
+-- These tests simulate the confirm wrapper built in patch_snacks() to verify
+-- that the third `action` argument is forwarded correctly to the base confirm.
+-- (Dropping it was the cause of E5108 when opening files.)
+
+describe("confirm action wrapper", function()
+  before_each(function()
+    reset_virtual_open()
+    Tree:reset()
+  end)
+
+  -- Build a minimal confirm wrapper matching the logic in init.lua.
+  local function make_confirm_wrapper(base_confirm_fn, toggle_fn, update_fn)
+    return function(picker, item, action)
+      local is_virtual = item
+        and (item._slnx_virtual
+          or (item.dir and item.file and item.file:find("/.slnx_virtual/", 1, true) ~= nil))
+
+      if is_virtual then
+        toggle_fn(item.file)
+        update_fn(picker)
+        return
+      end
+
+      if base_confirm_fn then
+        base_confirm_fn(picker, item, action)
+      end
+    end
+  end
+
+  it("forwards all three arguments to base_confirm for real file items", function()
+    local received = {}
+    local base = function(p, i, a)
+      received = { picker = p, item = i, action = a }
+    end
+    local confirm = make_confirm_wrapper(base, function() end, function() end)
+
+    local fake_picker = {}
+    local fake_item   = { dir = false, file = "/solution/root/readme.md" }
+    local fake_action = { cmd = "edit" }
+
+    confirm(fake_picker, fake_item, fake_action)
+
+    assert.equals(fake_picker, received.picker)
+    assert.equals(fake_item,   received.item)
+    assert.equals(fake_action, received.action)  -- must NOT be nil
+  end)
+
+  it("does not forward to base_confirm for virtual solution folders", function()
+    local base_called = false
+    local toggled_path = nil
+    local updated = false
+
+    local base = function() base_called = true end
+    local toggle = function(p) toggled_path = p end
+    local update = function() updated = true end
+    local confirm = make_confirm_wrapper(base, toggle, update)
+
+    local vpath = "/solution/root/.slnx_virtual/src"
+    local fake_item = { dir = true, file = vpath, _slnx_virtual = true }
+
+    confirm({}, fake_item, { cmd = "edit" })
+
+    assert.is_false(base_called)
+    assert.equals(vpath, toggled_path)
+    assert.is_true(updated)
+  end)
+
+  it("detects virtual folders by path sentinel even without _slnx_virtual flag", function()
+    local base_called = false
+    local toggled = false
+
+    local base = function() base_called = true end
+    local toggle = function() toggled = true end
+    local confirm = make_confirm_wrapper(base, toggle, function() end)
+
+    -- Item that matches by path but has no _slnx_virtual field
+    local fake_item = { dir = true, file = "/root/.slnx_virtual/Tests" }
+
+    confirm({}, fake_item, {})
+
+    assert.is_false(base_called)
+    assert.is_true(toggled)
+  end)
+end)
+
 -- ── Virtual folder toggle (open/closed state) ─────────────────────────────────
 
 describe("finder.toggle_virtual", function()

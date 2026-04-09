@@ -73,7 +73,7 @@ local function patch_snacks()
       -- Wrap the confirm action that setup() installed.
       merged.actions = merged.actions or {}
       local base_confirm = merged.actions.confirm
-      merged.actions.confirm = function(picker, item)
+      merged.actions.confirm = function(picker, item, action)
         -- Identify virtual solution folders by custom flag OR path sentinel.
         local is_virtual = item
           and (item._slnx_virtual
@@ -91,7 +91,7 @@ local function patch_snacks()
         end
 
         if base_confirm then
-          base_confirm(picker, item)
+          base_confirm(picker, item, action)
         end
       end
 
