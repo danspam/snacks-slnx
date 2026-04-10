@@ -75,12 +75,23 @@ local function patch_snacks()
       local base_confirm = merged.actions.confirm
       merged.actions.confirm = function(picker, item, action)
         -- Identify virtual solution folders by custom flag OR path sentinel.
+        -- Display-override project items also have _slnx_virtual=true but carry
+        -- _slnx_real_dir pointing to the actual directory on disk.
         local is_virtual = item
           and (item._slnx_virtual
             or (item.dir and item.file and item.file:find("/.slnx_virtual/", 1, true) ~= nil))
 
         if is_virtual then
-          require("snacks-slnx.finder").toggle_virtual(item.file)
+          if item._slnx_real_dir then
+            -- Display-override project item: toggle the real directory via Tree.
+            local ok_tree, Tree = pcall(require, "snacks.explorer.tree")
+            if ok_tree then
+              Tree:toggle(item._slnx_real_dir)
+            end
+          else
+            -- Pure virtual solution folder: flip our own toggle state.
+            require("snacks-slnx.finder").toggle_virtual(item.file)
+          end
           local ok_act, actions = pcall(require, "snacks.explorer.actions")
           if ok_act and actions.update then
             actions.update(picker)

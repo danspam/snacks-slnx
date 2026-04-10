@@ -471,6 +471,118 @@ describe("finder.make", function()
     assert.is_nil(proj._slnx_virtual)
   end)
 
+  -- ── Project display name override ────────────────────────────────────────
+
+  it("uses project name as display when it differs from the directory basename", function()
+    -- project.name = "waywedo.Admin", proj_abs ends in "Server" (mismatch)
+    local sol = {
+      folders = {
+        {
+          name = "src",
+          raw_name = "/src/",
+          folders = {},
+          projects = {
+            { path = "Server/waywedo.Admin.csproj", dir = "Server", name = "waywedo.Admin", startup = false },
+          },
+          files = {},
+        },
+      },
+      projects = {},
+      files = {},
+    }
+    local items = collect(finder.make(sol, cwd, opts))
+    -- root + src virtual + project item = 3
+    assert.equals(3, #items)
+
+    local proj_item = items[3]
+    -- Display path should end with the project name, not "Server"
+    assert.truthy(proj_item.file:find("waywedo.Admin", 1, true),
+      "Expected display path to contain project name, got: " .. proj_item.file)
+    -- Must NOT expose the bare "Server" basename
+    assert.is_nil(proj_item.file:match("/Server$"),
+      "Display path should not end with /Server")
+    -- Real dir stored for Tree operations
+    assert.equals(cwd .. "/Server", proj_item._slnx_real_dir)
+    -- Marked virtual (no real FS counterpart for display path)
+    assert.is_true(proj_item._slnx_virtual)
+  end)
+
+  it("sets no display override when project name matches directory basename", function()
+    local sol = {
+      folders = {
+        {
+          name = "src",
+          raw_name = "/src/",
+          folders = {},
+          projects = {
+            { path = "src/App/App.csproj", dir = "src/App", name = "App", startup = false },
+          },
+          files = {},
+        },
+      },
+      projects = {},
+      files = {},
+    }
+    local items = collect(finder.make(sol, cwd, opts))
+    local proj_item = items[3]
+    -- File should be the real path (no override)
+    assert.equals(cwd .. "/src/App", proj_item.file)
+    assert.is_nil(proj_item._slnx_virtual)
+    assert.is_nil(proj_item._slnx_real_dir)
+  end)
+
+  it("expands an overridden project dir using the real dir path", function()
+    local real_dir = cwd .. "/Server"
+    -- Register the real dir (not display path) as open in the stub Tree
+    Tree._nodes[real_dir] = { path = real_dir, dir = true, open = true }
+    Tree._children[real_dir] = {
+      {
+        path = real_dir .. "/Program.cs",
+        dir = false, open = false,
+        parent = { path = real_dir },
+        hidden = false, ignored = false, status = nil, severity = nil, type = "file",
+      },
+    }
+
+    local sol = {
+      folders = {
+        {
+          name = "src",
+          raw_name = "/src/",
+          folders = {},
+          projects = {
+            { path = "Server/waywedo.Admin.csproj", dir = "Server", name = "waywedo.Admin", startup = false },
+          },
+          files = {},
+        },
+      },
+      projects = {},
+      files = {},
+    }
+    local items = collect(finder.make(sol, cwd, opts))
+    -- root + src + project item (open) + Program.cs = 4
+    assert.equals(4, #items)
+    local cs = find_item(items, "Program.cs")
+    assert.is_not_nil(cs)
+  end)
+
+  it("applies display name override to root-level projects too", function()
+    local sol = {
+      folders = {},
+      projects = {
+        { path = "Server/waywedo.Admin.csproj", dir = "Server", name = "waywedo.Admin", startup = false },
+      },
+      files = {},
+    }
+    local items = collect(finder.make(sol, cwd, opts))
+    -- root + project item = 2
+    assert.equals(2, #items)
+    local proj_item = items[2]
+    assert.truthy(proj_item.file:find("waywedo.Admin", 1, true),
+      "Root-level project should use display name override")
+    assert.equals(cwd .. "/Server", proj_item._slnx_real_dir)
+  end)
+
   -- ── Full fixture integration ──────────────────────────────────────────────
 
   it("produces correct item count for simple.slnx", function()

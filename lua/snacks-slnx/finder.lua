@@ -43,6 +43,8 @@ end
 
 --- Build a virtual filesystem path for a solution folder so that it is
 --- unique but will never collide with a real directory.
+--- All virtual paths share the /.slnx_virtual/ prefix, which the confirm
+--- action uses as a sentinel to identify items that need special handling.
 ---@param cwd string
 ---@param folder_name string Normalized folder name (no slashes)
 ---@param parent_virtual_path string|nil Parent's virtual path or nil for root
@@ -53,6 +55,17 @@ local function virtual_path(cwd, folder_name, parent_virtual_path)
     return parent_virtual_path .. "/" .. safe_name
   end
   return cwd .. "/.slnx_virtual/" .. safe_name
+end
+
+--- Build a virtual display path for a project whose directory basename does
+--- not match the project name (e.g. .../Server/waywedo.Admin.csproj).
+--- The path ends with the project name so fnamemodify(path, ":t") returns it.
+---@param cwd string
+---@param project_name string  e.g. "waywedo.Admin"
+---@return string
+local function project_display_path(cwd, project_name)
+  local safe_name = project_name:gsub("[^%w%-_.]", "_")
+  return cwd .. "/.slnx_virtual/.proj/" .. safe_name
 end
 
 --- Resolve the on-disk absolute path for a project relative to the solution root.
@@ -137,35 +150,51 @@ function M.make(solution, cwd, opts)
     end
 
     --- Emit a directory item (real or virtual) and return it.
-    ---@param dir_path string Absolute path (may be virtual/non-existent)
+    ---
+    --- For solution folders:   is_virtual=true,  real_dir=nil
+    --- For normal project dirs: is_virtual=false, real_dir=nil
+    --- For projects whose directory basename differs from the project name
+    ---   (e.g. .../Server/ for waywedo.Admin):
+    ---                          is_virtual=true,  real_dir=<actual dir path>
+    ---   In this case dir_path is a virtual display path ending with the
+    ---   project name; real_dir is used for Tree state and content traversal.
+    ---
+    ---@param dir_path string Absolute path used for display (may be virtual)
     ---@param parent table Parent item
     ---@param sort_key string
-    ---@param is_virtual boolean True for solution folder nodes with no real path
+    ---@param is_virtual boolean True when dir_path has no real filesystem counterpart
+    ---@param real_dir string|nil Actual directory path when dir_path is a display override
     ---@return table item
-    local function emit_dir_item(dir_path, parent, sort_key, is_virtual)
+    local function emit_dir_item(dir_path, parent, sort_key, is_virtual, real_dir)
       local basename = vim.fn.fnamemodify(dir_path, ":t")
-      local node = ok_tree and not is_virtual and Tree:node(dir_path) or nil
+      -- For Tree state, use real_dir when provided (display-override project items),
+      -- otherwise use dir_path for real dirs; virtual solution folders have no node.
+      local tree_path = real_dir or (not is_virtual and dir_path) or nil
+      local node = ok_tree and tree_path and Tree:node(tree_path) or nil
       local open_state
-      if is_virtual then
-        -- Consult session state; default open when first seen.
+      if is_virtual and not real_dir then
+        -- Solution folder: consult session toggle state; default open.
         local stored = M.virtual_open[dir_path]
         open_state = (stored == nil) and true or stored
       else
+        -- Real dir or display-override project dir: follow Tree state.
         open_state = node and node.open or false
       end
       local item = {
         file = dir_path,
         dir = true,
         open = open_state,
-        text = dir_path,
+        text = real_dir or dir_path,
         parent = parent,
         sort = sort_key,
         hidden = not is_virtual and basename:sub(1, 1) == "." or false,
         status = node and (not node.open or opts.git_status_open) and node.status or nil,
         severity = node and (not node.open or opts.diagnostics_open) and node.severity or nil,
         type = node and node.type or "directory",
-        -- Custom flag so the confirm action can treat virtual folders specially.
+        -- Set for both solution folders and display-override project items.
         _slnx_virtual = is_virtual or nil,
+        -- Only set for display-override project items; nil for solution folders.
+        _slnx_real_dir = real_dir or nil,
       }
       emit(item)
       return item
@@ -240,8 +269,12 @@ function M.make(solution, cwd, opts)
       -- Projects
       for _, project in ipairs(folder.projects or {}) do
         local proj_abs = resolve_project_dir(cwd, project.dir)
+        local proj_basename = vim.fn.fnamemodify(proj_abs, ":t")
+        local needs_override = project.name ~= proj_basename
+        local display_path = needs_override and project_display_path(cwd, project.name) or proj_abs
+        local real_dir = needs_override and proj_abs or nil
         local proj_sort = next_sort(folder_item.sort, true)
-        local proj_item = emit_dir_item(proj_abs, folder_item, proj_sort, false)
+        local proj_item = emit_dir_item(display_path, folder_item, proj_sort, needs_override, real_dir)
         if proj_item.open then
           emit_project_contents(proj_abs, proj_item)
         end
@@ -267,8 +300,12 @@ function M.make(solution, cwd, opts)
     -- Root-level projects (no containing folder)
     for _, project in ipairs(solution.projects or {}) do
       local proj_abs = resolve_project_dir(cwd, project.dir)
+      local proj_basename = vim.fn.fnamemodify(proj_abs, ":t")
+      local needs_override = project.name ~= proj_basename
+      local display_path = needs_override and project_display_path(cwd, project.name) or proj_abs
+      local real_dir = needs_override and proj_abs or nil
       local sk = next_sort(root.sort, true)
-      local proj_item = emit_dir_item(proj_abs, root, sk, false)
+      local proj_item = emit_dir_item(display_path, root, sk, needs_override, real_dir)
       if proj_item.open then
         emit_project_contents(proj_abs, proj_item)
       end
