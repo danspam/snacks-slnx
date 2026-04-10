@@ -13,9 +13,9 @@ M.virtual_open = {}
 ---@param vpath string
 ---@return boolean new_state
 function M.toggle_virtual(vpath)
-  -- Default is open, so a missing key means "was open, now close"
+  -- Default is closed, so a missing key means "was closed, now open"
   local was_open = M.virtual_open[vpath]
-  if was_open == nil then was_open = true end
+  if was_open == nil then was_open = false end
   M.virtual_open[vpath] = not was_open
   return not was_open
 end
@@ -173,9 +173,9 @@ function M.make(solution, cwd, opts)
       local node = ok_tree and tree_path and Tree:node(tree_path) or nil
       local open_state
       if is_virtual and not real_dir then
-        -- Solution folder: consult session toggle state; default open.
+        -- Solution folder: consult session toggle state; default closed.
         local stored = M.virtual_open[dir_path]
-        open_state = (stored == nil) and true or stored
+        open_state = stored == true  -- absent key = false (closed)
       else
         -- Real dir or display-override project dir: follow Tree state.
         open_state = node and node.open or false

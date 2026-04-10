@@ -7,7 +7,8 @@
       "Bash(\"/c/Program Files/Neovim/bin/nvim\" --headless -u tests/minimal_init.lua -c \"PlenaryBustedDirectory tests/spec {minimal_init = 'tests/minimal_init.lua'}\")",
       "Bash(echo \"EXIT:$?\")",
       "Bash(\"/c/Program Files/Neovim/bin/nvim\" --headless -u tests/minimal_init.lua -c \"luafile tests/runner.lua\")",
-      "Bash(echo \"EXIT_CODE:$?\")"
+      "Bash(echo \"EXIT_CODE:$?\")",
+      "Bash(nvim --headless -u tests/minimal_init.lua -c \"lua require\\('tests.runner'\\)\")"
     ]
   }
 }
